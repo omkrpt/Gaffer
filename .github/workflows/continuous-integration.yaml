@@ -189,10 +189,12 @@ jobs:
         run: mvn -B -ntp clean install -P quick -pl ${{matrix.modules.values}} -am
 
       - name: Run Flaky Test without NonDex
-        run: mvn -B -ntp verify -P coverage -pl ${{matrix.tests.module}} -Dtest=${{matrix.tests.values}}
+        run: >
+          mvn -B -ntp verify -P coverage -pl ${{matrix.tests.module}} '-Dtest=${{matrix.tests.values}}'
 
       - name: Run Flaky Test with NonDex
-        run: mvn -B -ntp edu.illinois:nondex-maven-plugin:2.1.1:nondex -P coverage -pl ${{matrix.tests.module}} -Dtest=${{matrix.tests.values}} -DnondexRuns=10
+        run: >
+          mvn -B -ntp edu.illinois:nondex-maven-plugin:2.1.1:nondex -P coverage -pl ${{matrix.tests.module}} '-Dtest=${{matrix.tests.values}}' -DnondexRuns=10
 
       - name: Test
         run: mvn -B -ntp verify -P coverage -pl ${{matrix.modules.values}}
