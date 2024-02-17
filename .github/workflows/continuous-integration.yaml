@@ -1,6 +1,16 @@
 name: Continuous Integration
 
-on: [workflow_dispatch]
+on:
+  pull_request:
+    paths-ignore:
+      - '**/README.md'
+  push:
+    branches:
+      - 'release/**'
+      - 'hotfix/**'
+      - develop
+      - master
+  workflow_dispatch: {}
 
 jobs:
   check-all-modules-are-tested:
@@ -11,23 +21,23 @@ jobs:
       - name: Check all modules are tested
         run: ./cd/check_modules.sh
 
-  #  check-copyright:
-  #    name: Check Copyright Headers
-  #    runs-on: ubuntu-latest
-  #    if: github.event_name == 'pull_request'
-  #    steps:
-  #      - uses: actions/checkout@v4
-  #        with:
-  #          fetch-depth: 0
-  #
-  #      - name: Setup JDK
-  #        uses: actions/setup-java@v4
-  #        with:
-  #          distribution: 'zulu'
-  #          java-version: '8'
-  #
-  #      - name: Run Spotless copyright check
-  #        run: mvn -ntp spotless:check -T0.5C
+  check-copyright:
+    name: Check Copyright Headers
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '8'
+
+      - name: Run Spotless copyright check
+        run: mvn -ntp spotless:check -T0.5C
 
   build-javadoc:
     name: Build Javadoc
@@ -59,31 +69,31 @@ jobs:
     name: Tests
     runs-on: ${{ matrix.os }}
     strategy:
-      fail-fast: false
+      fail-fast: true
       matrix:
         # The below line does the following, check if the branch name contains the words 'windows' or 'release'.
         # If these words are present it runs the tests on Windows AND Ubuntu. If the words aren't present it runs the tests on Ubuntu ONLY
         # The 'release' keyword is currently disabled. Change 'release-disabled-for-now' to 'release' once the tests have been fixed to reenable this.
-        os: ["ubuntu-latest", "windows-latest"]
+        os: ${{ fromJSON( (contains( github.head_ref, 'windows') || contains( github.head_ref, 'release-disabled-for-now'))  && '["ubuntu-latest", "windows-latest"]' || '["ubuntu-latest"]' ) }}
         modules:
           - name: Core
             values: :gaffer2,:core,:access,:cache,:common-util,:data,:exception,:graph,:operation,:serialisation,:store,:type
-        #          - name: Accumulo
-        #            values: :accumulo-store,:accumulo-rest
-        #          - name: Federated-And-Map
-        #            values: :integration-test,:federated-store,:map-store,:map-rest
-        #          - name: REST
-        #            values: :rest-api,:common-rest,:spring-rest,:core-rest,:store-implementation,:proxy-store
-        #          - name: Examples
-        #            values: :example,:basic,:basic-model,:basic-rest,:road-traffic,:road-traffic-model,:road-traffic-generators,:road-traffic-rest,:road-traffic-demo,:federated-demo
-        #          - name: Big-Data-Libraries
-        #            values: :flink-library,:hdfs-library,:spark,:spark-library,:spark-accumulo-library
-        #          - name: Time-Library
-        #            values: :library,:time-library
-        #          - name: Caches
-        #            values: :cache-library,:sketches-library,:bitmap-library,:hazelcast-cache-service,:jcs-cache-service
-        #          - name: Tinkerpop
-        #            values: :tinkerpop
+          - name: Accumulo
+            values: :accumulo-store,:accumulo-rest
+          - name: Federated-And-Map
+            values: :integration-test,:federated-store,:map-store,:map-rest
+          - name: REST
+            values: :rest-api,:common-rest,:spring-rest,:core-rest,:store-implementation,:proxy-store
+          - name: Examples
+            values: :example,:basic,:basic-model,:basic-rest,:road-traffic,:road-traffic-model,:road-traffic-generators,:road-traffic-rest,:road-traffic-demo,:federated-demo
+          - name: Big-Data-Libraries
+            values: :flink-library,:hdfs-library,:spark,:spark-library,:spark-accumulo-library
+          - name: Time-Library
+            values: :library,:time-library
+          - name: Caches
+            values: :cache-library,:sketches-library,:bitmap-library,:hazelcast-cache-service,:jcs-cache-service
+          - name: Tinkerpop
+            values: :tinkerpop
         exclude:
           - os: windows-latest
             modules:
@@ -100,14 +110,6 @@ jobs:
           - os: windows-latest
             modules:
               name: Rest
-        flaky-tests:
-          - name: GraphSerialisableTest.shouldConsumeGraph
-            module: core/graph
-            values: uk.gov.gchq.gaffer.graph.GraphSerialisableTest#shouldConsumeGraph
-          - name: GraphTest.shouldConstructGraphAndCreateViewWithGroups
-            module: core/graph
-            values: uk.gov.gchq.gaffer.graph.GraphTest#shouldConstructGraphAndCreateViewWithGroups
-
     env:
       MAVEN_OPTS: -Dmaven.wagon.http.retryHandler.count=3 -Dmaven.wagon.httpconnectionManager.ttlSeconds=25
     steps:
@@ -133,14 +135,67 @@ jobs:
       - name: Install
         run: mvn -B -ntp clean install -P quick -pl ${{matrix.modules.values}} -am
 
-      #      - name: Test
-      #        run: mvn -B -ntp verify -P coverage -pl ${{matrix.modules.values}}
+      - name: Test
+        run: mvn -B -ntp verify -P coverage -pl ${{matrix.modules.values}}
+
+      - name: Add JaCoCo reports to artifact
+        uses: actions/upload-artifact@v4
+        if: matrix.os == 'ubuntu-latest'
+        with:
+          name: jacoco-coverage-${{matrix.modules.name}}
+          path: "*/**/jacoco.xml"
+          retention-days: 5
+
+  run-flaky-tests:
+    name: Flaky Tests
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ["ubuntu-latest", "windows-latest"]
+        modules:
+          - name: Core
+            values: :graph
+        tests:
+          - name: GraphSerialisableTest.shouldConsumeGraph
+            module: core/graph
+            values: uk.gov.gchq.gaffer.graph.GraphSerialisableTest#shouldConsumeGraph
+          - name: GraphTest.shouldConstructGraphAndCreateViewWithGroups
+            module: core/graph
+            values: uk.gov.gchq.gaffer.graph.GraphTest#shouldConstructGraphAndCreateViewWithGroups
+    env:
+      MAVEN_OPTS: -Dmaven.wagon.http.retryHandler.count=3 -Dmaven.wagon.httpconnectionManager.ttlSeconds=25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '8'
+
+      - name: Cache dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.m2/repository
+            !~/.m2/repository/uk
+          key: ${{matrix.modules.name}}-gaffer-dependencies
+          restore-keys: ${{matrix.modules.name}}
+
+      - name: Install
+        run: mvn -B -ntp clean install -P quick -pl ${{matrix.modules.values}} -am
 
       - name: Run Flaky Test without NonDex
-        run: mvn -B -ntp verify -P coverage -pl ${{matrix.flaky-tests.module}} -Dtest=${{matrix.flaky-tests.values}}
+        run: mvn -B -ntp verify -P coverage -pl ${{matrix.tests.module}} -Dtest=${{matrix.tests.values}}
 
       - name: Run Flaky Test with NonDex
-        run: mvn -B -ntp edu.illinois:nondex-maven-plugin:2.1.1:nondex -P coverage -pl ${{matrix.flaky-tests.module}} -Dtest=${{matrix.flaky-tests.values}} -DnondexRuns=100
+        run: mvn -B -ntp edu.illinois:nondex-maven-plugin:2.1.1:nondex -P coverage -pl ${{matrix.tests.module}} -Dtest=${{matrix.tests.values}} -DnondexRuns=100
+
+      - name: Test
+        run: mvn -B -ntp verify -P coverage -pl ${{matrix.modules.values}}
 
       - name: Add JaCoCo reports to artifact
         uses: actions/upload-artifact@v4
