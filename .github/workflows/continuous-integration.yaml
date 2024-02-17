@@ -10,6 +10,7 @@ on:
       - 'hotfix/**'
       - develop
       - master
+  workflow_dispatch: {}
 
 jobs:
   check-all-modules-are-tested:
@@ -45,6 +46,67 @@ jobs:
         run: |
           mvn -ntp clean install -Pquick -Dskip.jar-with-dependencies=true -Dshaded.jar.phase=true
           mvn -ntp javadoc:javadoc -Pquick
+
+  run-flaky-tests:
+    name: Flaky Tests
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ${{ fromJSON( (contains( github.head_ref, 'windows') || contains( github.head_ref, 'release-disabled-for-now'))  && '["ubuntu-latest", "windows-latest"]' || '["ubuntu-latest"]' ) }}
+        modules:
+          - name: Core
+            values: :graph
+        tests:
+          - name: GraphSerialisableTest.shouldConsumeGraph
+            module: core/graph
+            values: "uk.gov.gchq.gaffer.graph.GraphSerialisableTest#shouldConsumeGraph"
+          - name: GraphTest.shouldConstructGraphAndCreateViewWithGroups
+            module: core/graph
+            values: "uk.gov.gchq.gaffer.graph.GraphTest#shouldConstructGraphAndCreateViewWithGroups"
+    env:
+      MAVEN_OPTS: -Dmaven.wagon.http.retryHandler.count=3 -Dmaven.wagon.httpconnectionManager.ttlSeconds=25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '8'
+
+      - name: Cache dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.m2/repository
+            !~/.m2/repository/uk
+          key: ${{matrix.modules.name}}-gaffer-dependencies
+          restore-keys: ${{matrix.modules.name}}
+
+      - name: Install
+        run: mvn -B -ntp clean install -P quick -pl ${{matrix.modules.values}} -am
+
+      - name: Run Flaky Test without NonDex
+        run: >
+          mvn -B -ntp verify -P coverage -pl ${{matrix.tests.module}} '-Dtest=${{matrix.tests.values}}'
+
+      - name: Run Flaky Test with NonDex
+        run: >
+          mvn -B -ntp edu.illinois:nondex-maven-plugin:2.1.1:nondex -P coverage -pl ${{matrix.tests.module}} '-Dtest=${{matrix.tests.values}}' -DnondexRuns=10
+
+      - name: Test
+        run: mvn -B -ntp verify -P coverage -pl ${{matrix.modules.values}}
+
+      - name: Add JaCoCo reports to artifact
+        uses: actions/upload-artifact@v4
+        if: matrix.os == 'ubuntu-latest'
+        with:
+          name: jacoco-coverage-${{matrix.modules.name}}-flaky-run
+          path: "*/**/jacoco.xml"
+          retention-days: 5
 
   build-and-run-tests:
     name: Tests
